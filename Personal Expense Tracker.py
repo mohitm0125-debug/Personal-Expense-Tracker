@@ -28,14 +28,22 @@ def round_rect(c, x1, y1, x2, y2, r, **kw):
 
 
 class Card(tk.Canvas):
-    """Rounded summary card."""
+    """Rounded summary card that stretches with the window."""
 
-    def __init__(self, parent, title, colour, w=270, h=110):
-        super().__init__(parent, width=w, height=h, bg=BG, highlightthickness=0)
-        round_rect(self, 2, 2, w - 2, h - 2, 18, fill=colour, outline=colour)
+    def __init__(self, parent, title, colour, h=110):
+        super().__init__(parent, height=h, bg=BG, highlightthickness=0)
+        self.colour = colour
+        self.h = h
         self.create_text(20, 30, text=title, anchor="w", fill="white", font=("Segoe UI", 11))
         self.value = self.create_text(20, 70, text="0.00", anchor="w", fill="white",
                                       font=("Segoe UI", 24, "bold"))
+        self.bind("<Configure>", self._redraw)
+
+    def _redraw(self, e):
+        self.delete("bg")
+        shape = round_rect(self, 2, 2, e.width - 2, self.h - 2, 18, fill=self.colour,
+                           outline=self.colour, tags="bg")
+        self.tag_lower(shape)
 
     def set(self, amount):
         self.itemconfig(self.value, text=f"{amount:,.2f}")
@@ -46,6 +54,42 @@ def flat_button(parent, text, colour, command, **kw):
                   activebackground=colour, activeforeground="white", relief="flat",
                   bd=0, font=FONT_B, cursor="hand2", **kw)
     return b
+
+
+TABLE_COLS = ("No", "Type", "ID", "Date", "Source / Category", "Amount", "Description")
+TABLE_WIDTHS = (50, 75, 55, 95, 130, 105, 160)
+TABLE_ANCHORS = ("center",) * 7  # every cell and heading centred
+TABLE_STRETCH = ("Source / Category", "Description")
+
+
+def make_table(parent, height=10):
+    """Bordered table with aligned headings, striped rows and a scrollbar."""
+    wrap = tk.Frame(parent, bg="#cbd5e1", padx=1, pady=1)
+    inner = tk.Frame(wrap, bg=WHITE)
+    inner.pack(fill="both", expand=True)
+    tree = ttk.Treeview(inner, columns=TABLE_COLS, show="headings", height=height, selectmode="extended")
+    for c, w, a in zip(TABLE_COLS, TABLE_WIDTHS, TABLE_ANCHORS):
+        tree.heading(c, text=c, anchor=a)
+        tree.column(c, width=w, minwidth=40, anchor=a, stretch=c in TABLE_STRETCH)
+    tree.tag_configure("even", background=WHITE)
+    tree.tag_configure("odd", background="#f1f5f9")
+    tree.tag_configure("Income", foreground=GREEN)
+    tree.tag_configure("Expense", foreground=RED)
+    sb = ttk.Scrollbar(inner, orient="vertical", command=tree.yview)
+    tree.configure(yscrollcommand=sb.set)
+    tree.pack(side="left", fill="both", expand=True)
+    sb.pack(side="right", fill="y")
+    return wrap, tree
+
+
+def table_row(n, t):
+    """Values + tags for one transaction row."""
+    kind = t["Type Of Transaction"]
+    detail = t.get("Source") or t.get("Category", "")
+    sign = "+" if kind == "Income" else "-"
+    values = (n, kind, t["Transaction id"], t["Date"], detail,
+              f"{sign}{t['Amount']:,.2f}", str(t.get("Description", "")).strip())
+    return values, (kind, "odd" if n % 2 == 0 else "even")
 
 
 class ExpenseApp(tk.Tk):
@@ -61,10 +105,10 @@ class ExpenseApp(tk.Tk):
 
         style = ttk.Style(self)
         style.theme_use("clam")
-        style.configure("Treeview", rowheight=28, font=FONT, background=WHITE,
+        style.configure("Treeview", rowheight=30, font=FONT, background=WHITE,
                         fieldbackground=WHITE, borderwidth=0)
         style.configure("Treeview.Heading", font=FONT_B, background="#e2e8f0",
-                        foreground=TEXT, relief="flat")
+                        foreground=TEXT, relief="groove", borderwidth=1, padding=(8, 7))
         style.map("Treeview", background=[("selected", "#bfdbfe")],
                   foreground=[("selected", TEXT)])
 
@@ -209,19 +253,18 @@ class DashboardPage(tk.Frame):
         self.c_inc = Card(row, "Total Income", GREEN)
         self.c_exp = Card(row, "Total Expense", RED)
         self.c_bal = Card(row, "Current Balance", BLUE)
-        for c in (self.c_inc, self.c_exp, self.c_bal):
-            c.pack(side="left", padx=(0, 18))
+        for i, c in enumerate((self.c_inc, self.c_exp, self.c_bal)):
+            c.grid(row=0, column=i, sticky="ew", padx=(0, 0 if i == 2 else 16))
+            row.columnconfigure(i, weight=1, uniform="cards")
 
         tk.Label(self, text="Recent Transactions", font=("Segoe UI", 13, "bold"),
                  bg=BG, fg=TEXT).pack(anchor="w", padx=30, pady=(25, 8))
-        cols = ("Type", "Date", "Details", "Amount")
-        self.tree = ttk.Treeview(self, columns=cols, show="headings", height=8)
-        for c, w in zip(cols, (100, 120, 300, 120)):
-            self.tree.heading(c, text=c)
-            self.tree.column(c, width=w, anchor="w")
-        self.tree.tag_configure("Income", foreground=GREEN)
-        self.tree.tag_configure("Expense", foreground=RED)
-        self.tree.pack(fill="both", expand=True, padx=30, pady=(0, 25))
+
+        wrap, self.tree = make_table(self, height=10)
+        wrap.pack(fill="both", expand=True, padx=30)
+
+        self.footer = tk.Label(self, text="", bg=BG, fg=MUTED, font=FONT)
+        self.footer.pack(anchor="w", padx=30, pady=(8, 16))
 
     def refresh(self):
         inc, exp, bal = self.app.totals()
@@ -229,14 +272,12 @@ class DashboardPage(tk.Frame):
         self.c_exp.set(exp)
         self.c_bal.set(bal)
         self.tree.delete(*self.tree.get_children())
-        allt = self.app.income + self.app.expense
-        allt.sort(key=lambda t: t["Date"], reverse=True)
-        for t in allt[:8]:
-            detail = t.get("Source") or t.get("Category", "")
-            sign = "+" if t["Type Of Transaction"] == "Income" else "-"
-            self.tree.insert("", "end", tags=(t["Type Of Transaction"],),
-                             values=(t["Type Of Transaction"], t["Date"], detail,
-                                     f"{sign}{t['Amount']:,.2f}"))
+        allt = sorted(self.app.income + self.app.expense, key=lambda t: t["Date"], reverse=True)
+        for n, t in enumerate(allt[:30], start=1):
+            values, tags = table_row(n, t)
+            self.tree.insert("", "end", values=values, tags=tags)
+        self.footer.config(text=f"Showing {min(len(allt), 30)} of {len(allt)} transaction(s) - "
+                                f"open Transactions to search or delete")
 
 
 class FormPage(tk.Frame):
@@ -358,20 +399,8 @@ class TransactionsPage(tk.Frame):
 
         flat_button(bar, "Delete Selected", RED, self.delete_selected).pack(side="right", ipadx=10, ipady=4)
 
-        cols = ("No", "Type", "ID", "Amount", "Source / Category", "Date", "Description")
-        widths = (45, 80, 70, 110, 150, 100, 260)
-        wrap = tk.Frame(self, bg=BG)
+        wrap, self.tree = make_table(self, height=14)
         wrap.pack(fill="both", expand=True, padx=30)
-        self.tree = ttk.Treeview(wrap, columns=cols, show="headings", selectmode="extended")
-        for c, w in zip(cols, widths):
-            self.tree.heading(c, text=c)
-            self.tree.column(c, width=w, anchor="w")
-        self.tree.tag_configure("Income", foreground=GREEN)
-        self.tree.tag_configure("Expense", foreground=RED)
-        sb = ttk.Scrollbar(wrap, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=sb.set)
-        self.tree.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
 
         self.footer = tk.Label(self, text="", bg=BG, fg=MUTED, font=FONT)
         self.footer.pack(anchor="w", padx=30, pady=10)
@@ -394,10 +423,8 @@ class TransactionsPage(tk.Frame):
             if q and q not in hay:
                 continue
             n += 1
-            self.tree.insert("", "end", iid=str(t["Transaction id"]),
-                             tags=(t["Type Of Transaction"],),
-                             values=(n, t["Type Of Transaction"], t["Transaction id"],
-                                     f"{t['Amount']:,.2f}", detail, t["Date"], desc))
+            values, tags = table_row(n, t)
+            self.tree.insert("", "end", iid=str(t["Transaction id"]), values=values, tags=tags)
         self.footer.config(text=f"{n} transaction(s) shown")
 
     def delete_selected(self):
