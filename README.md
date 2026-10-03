@@ -1,6 +1,7 @@
 # Personal Expense Tracker
 <br> 
-# **This is valid only for Desktop**
+
+This is valid only for Desktop
 <br> 
 
 A simple **Python-based Personal Expense Tracker** that helps users
